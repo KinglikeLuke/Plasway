@@ -109,7 +109,7 @@ function plot_results(func, data::Spectrum, popt, yground, yamp)
     return
 end
 
-function cleandata(data::Matrix)
+function cleandata(data::Matrix; threshold=0.92)
     """
     Data has uniteresting down time, which gets removed due to its lower intensity
     Ground is also removed for better contrast in plot
@@ -118,7 +118,6 @@ function cleandata(data::Matrix)
     ground = minimum(data, dims=1)
     _data = data .- ground
     uniformitycheck = vec(Bool.(zeros(size(data)[2])))
-    threshold = 0.99 # Must be beween 0 and 1
     for (i, spec) in enumerate(eachcol(_data))
         uniformitycheck[i] = eval_spectralflatness(spec) .< threshold
     end
@@ -144,19 +143,30 @@ function eval_spectralflatness(spectrum)
 end
 
 function extractcycles(data, uniformitycheck)
-    """
-    extracts averages of the active cycles. 
-    data: the uncleaned data!
-    """
     indices = findall(!iszero, uniformitycheck[2:end] .!= uniformitycheck[1:end-1]) .+ 1 # extract periods of falses and trues
     indices = vcat(1, indices, length(uniformitycheck))
-    # indices = remove_close_integers(indices)
-    cycle_averages = vec(zeros(size(data)[1],0))
+    cycles = []
     for i in range(1, length(indices)-1)
         if uniformitycheck[1]==1 && i%2!=0 # check whether the first or second block is the active one
-            cycle_averages = average_cycles(data, cycle_averages, (indices[i], indices[i+1]))
+            push!(cycles, data[:,indices[i]:indices[i+1]])
         elseif  uniformitycheck[1]==0 && i%2==0
-            cycle_averages = average_cycles(data, cycle_averages, (indices[i], indices[i+1]))
+            push!(cycles, data[:,indices[i]:indices[i+1]])
+        end
+    end
+    return cycles
+end
+
+function extractcycleaverages(data, uniformitycheck)
+    """
+    extracts averages of the active cycles. 
+
+    data: the uncleaned data!
+    """
+    cycles = extractcycles(data, uniformitycheck)
+    cycle_averages = vec(zeros(size(data)[1],0))  # dont know yet how many cycles are actually going to be realized
+    for c in cycles
+        if size(c)[2]>2
+            vcat(cycle_averages, mean(c, dims=2)) # compute the rowwise average within one cycle
         end
     end
     return cycle_averages
@@ -212,10 +222,10 @@ function visualize_data(data; limit::Int64, clean::Bool, normalise::Bool)
     """
     display_data = data .- minimum(data, dims=1)
     if clean
-        display_data, uniform = cleandata(display_data)
+        display_data, uniform = cleandata(display_data, threshold = 0.9)
     end
     if normalise
-        bin, wavelength_uniformity = cleandata(permutedims(data, (2,1)))
+        bin, wavelength_uniformity = cleandata(permutedims(data, (2,1)), threshold=0.99)
         display_data = display_data ./ maximum(display_data, dims=2)
         display_data[.!wavelength_uniformity,:].=0
     end
@@ -224,6 +234,17 @@ function visualize_data(data; limit::Int64, clean::Bool, normalise::Bool)
     end
 
     return display_data
+end
+
+
+function extract_lineactivity(data::Matrix, x_data, wavelength)
+    focus = argmin(abs.(x_data .- wavelength))
+    linedata = data[focus-10:focus+10, :]
+    cleanlinedata, uniformity = cleandata(linedata, threshold=0.1)
+    # display(heatmap(cleanlinedata, c=:grays))
+    cycles = extractcycles(linedata, uniformity)
+    print(size(cycles))
+    display(plot(cycles))
 end
 
 function analyse_folder()
@@ -235,9 +256,10 @@ function analyse_folder()
         x_data = data[:,2]
         data = data[:,5:end]
         cleaned_data, uniformity = cleandata(data)
-        display_data = visualize_data(data, limit=0, clean=true, normalise=true)
-        display(heatmap(display_data, c=:heat))
-        #cycles = extractcycles(data, uniformity)
+        display_data = visualize_data(data, limit=0, clean=true, normalise=false)
+        # display(heatmap(display_data, c=:grays))
+        cycles = extractcycleaverages(data, uniformity)
+        extract_lineactivity(data, x_data, 810)
         #peaks_data = peak_analysis_sparse(cycles, x_data, 3, 3)
         #refined_peaks = DataFrame(x0 = vec(peaks_data[1].x0), I_ratio=vec(peaks_data[1].I./peaks_data[2].I), 
         #δx0 = vec(peaks_data[1].x0.-peaks_data[2].x0))
