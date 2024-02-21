@@ -1,12 +1,12 @@
 using Plots
 using LsqFit
 using Random
-using CalculusWithJulia
 using Peaks
 using DelimitedFiles
 using DataFrames
 using Profile
 using CSV
+using Statistics
 
 function testdata_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_off=1)
     """
@@ -117,19 +117,30 @@ function cleandata(data::Matrix)
 
     ground = minimum(data, dims=1)
     _data = data .- ground
-    n = 10  # how many interesting points are necessary for spectrum to be interesting.
-    average = sum(_data, dims=1)/size(_data)[1]
-    n_maxima_average = zeros(1, size(_data)[2]) # same dim as average
-    for (i, col) in enumerate(eachcol(_data))
-        n_maxima = sort(col,rev=true)[1:n]
-        n_maxima_average[i] = sum(n_maxima)/n
+    uniformitycheck = vec(Bool.(zeros(size(data)[2])))
+    threshold = 0.99 # Must be beween 0 and 1
+    for (i, spec) in enumerate(eachcol(_data))
+        uniformitycheck[i] = eval_spectralflatness(spec) .< threshold
     end
-    print(size(n_maxima_average))
-    threshold = 10  # find way to distinguish random noise from spectrum!!
-    uniformitycheck = vec(n_maxima_average./average .> threshold) # check which columns exceed the threshold
+    
     _data = _data[:,uniformitycheck]
     
     return _data, uniformitycheck
+end
+
+function eval_spectralflatness(spectrum)
+    # Stolen from ChatGPT, maybe debug
+    # Avoid log(0) issues by adding a small constant
+    eps = 1e-10
+
+    # Calculate the geometric mean and arithmetic mean of the spectrum
+    geo_mean = exp(mean(log.(spectrum .+ eps)))
+    arith_mean = mean(spectrum)
+
+    # Calculate spectral flatness
+    flatness = geo_mean / arith_mean
+
+    return flatness
 end
 
 function extractcycles(data, uniformitycheck)
@@ -140,7 +151,7 @@ function extractcycles(data, uniformitycheck)
     indices = findall(!iszero, uniformitycheck[2:end] .!= uniformitycheck[1:end-1]) .+ 1 # extract periods of falses and trues
     indices = vcat(1, indices, length(uniformitycheck))
     # indices = remove_close_integers(indices)
-    cycle_averages = zeros(size(data)[1],0)
+    cycle_averages = vec(zeros(size(data)[1],0))
     for i in range(1, length(indices)-1)
         if uniformitycheck[1]==1 && i%2!=0 # check whether the first or second block is the active one
             cycle_averages = average_cycles(data, cycle_averages, (indices[i], indices[i+1]))
@@ -159,19 +170,6 @@ function average_cycles(data, cycle_averages, index::Tuple{Int64, Int64})
     return cycle_averages
 end
 
-function remove_close_integers(arr)
-    result = Int[]
-    
-    for i in eachindex(arr)
-        push!(result, arr[i])
-        
-        if i > 1 && abs(arr[i] - arr[i-1]) < 2
-            pop!(result)
-        end
-    end
-    
-    return result
-end
 
 function peak_analysis(func::Function, cycles, xdata, heightfactor, widthfactor)
     peaktable=[]
@@ -230,7 +228,6 @@ end
 
 function analyse_folder()
     names = readdir("Data", join = true)
-    filenames = readdir("Data", join=false)
     output_folder = "results"
     try readdir(output_folder) catch e mkdir("results") end
     for name in names[5:end]
