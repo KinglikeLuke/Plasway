@@ -14,6 +14,7 @@ import pandas as pd
 
 
 def ptest_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_off=1):
+    # mean_fwhm?
     x = np.arange(length)
     off = np.random.normal(mean_off, mean_off / 5)
     x0 = np.random.randint(0, length + 1, n_peaks)
@@ -67,10 +68,9 @@ class FindPeaks(SpectralProperties):
         self.y_data = y_data - self.y_ground
         self.y_amp = max(self.y_data)
         self.y_data = self.y_data / self.y_amp
-
         height_req = np.average(np.abs(np.diff(self.y_data))) * height_factor
-        width_req = len(self.y_data)/1000*width_factor
-        prominence_req = width_req*prominence_factor
+        width_req = len(self.y_data) / 1000 * width_factor
+        prominence_req = width_req * prominence_factor
         self.i_guess = self._initial_guess(height_req, width_req, prominence_req)
         block_len = int((len(self.i_guess) - 1) / 3)
         self.i_off = self.i_guess[0]
@@ -78,11 +78,12 @@ class FindPeaks(SpectralProperties):
         self.i_I = self.i_guess[block_len + 1:2 * block_len + 1]
         self.i_fwhm = self.i_guess[2 * block_len + 1:]
         if full_fit:
-            self.i_popt = self.fit_peaks(self.i_guess)
-            self.i_off = self.i_popt[0]
-            self.i_x0 = self.i_popt[1:block_len+1]
-            self.i_I = self.i_popt[block_len+1:2*block_len+1]
-            self.i_fwhm = self.i_popt[2*block_len+1:]
+            i_popt = self.fit_peaks(self.i_guess)
+            # warum hat self.i_popt nen self?
+            self.i_off = i_popt[0]
+            self.i_x0 = i_popt[1:block_len + 1]
+            self.i_I = i_popt[block_len + 1:2 * block_len + 1]
+            self.i_fwhm = i_popt[2 * block_len + 1:]
 
     def fit_peaks(self, guess):
         result = least_squares(self.res_multi_peak_func, x0=guess)
@@ -132,14 +133,14 @@ class FindPeaks(SpectralProperties):
         pk, properties = find_peaks(self.y_data, height=height_req,
                                     width=width_req, prominence=prominence_req)
         # extract peak heights and fwhm
-        I = properties['peak_heights']
+        _I = properties['peak_heights']
         fwhm = properties['widths']
 
         # pack initial guesses together
-        guess = np.concatenate(([self.y_ground], pk, I, fwhm))
+        guess = np.concatenate(([self.y_ground], pk, _I, fwhm))
         return guess
 
-    #def return_results(self, popt):
+    # def return_results(self, popt):
     #    """
     #    get the results into an easily accessible order. Note that off is
     #    returned last.
@@ -159,7 +160,7 @@ class FindPeaks(SpectralProperties):
         fig = plt.figure(figsize=(10, 5))
         ax = fig.add_subplot(2, 1, 1)
         bx = fig.add_subplot(2, 1, 2)
-        if len(popt)>1:
+        if len(popt) > 1:
             x0 = popt[1:int(len(popt) / 3) + 1]
             ax.plot(x0, self.multi_peak_func(x0, popt), 'o', ms=5)
             test_data = self.multi_peak_func(x_plot, popt)
@@ -173,8 +174,8 @@ class FindPeaks(SpectralProperties):
 
 
 class Spectrum:
-    def __init__(self, _data):
-        self.data = _data
+    def __init__(self, _y_data, _spectral_range):
+        self.data = _y_data
         self.cleaned_data, self.uniformity = self.clean_data()
         self.cycles = self.extract_cycles()
 
@@ -212,39 +213,33 @@ class Spectrum:
     def return_results(self, *params):
         return self.cleaned_data, self.cycles
 
-    def peak_analysis(self):
+    def peak_analysis(self, height_factor, width_factor):
         peak_table = []
         for i in range(np.shape(self.cycles)[1]):
             y_data = self.cycles[:, i]
-            height_factor = 10
-            width_factor = 1
             analysis = FindPeaks(y_data, height_factor=height_factor, width_factor=width_factor)
-            df = pd.DataFrame(data={f'x0 {i}': analysis.i_x0, f'I {i}': analysis.i_I})
+            df = pd.DataFrame(data={f'x0_{i}': analysis.i_x0, f'I_{i}': analysis.i_I})
             peak_table.append(df)
-
         return peak_table
 
 
 names = glob.glob("Data/*.csv")
-fig = plt.figure(figsize=(15,15))
+fig = plt.figure(figsize=(15, 15))
 
 for image, name in enumerate(names):
-    data = np.loadtxt(name, skiprows=24, delimiter=',')
+    data = np.loadtxt(name, skiprows=24, delimiter=',', )
     extent_data = np.loadtxt(name, skiprows=24, usecols=1, delimiter=',')
     extent = 0, 800, np.min(extent_data), np.max(extent_data)
     data = data[4:]
     ax = fig.subplots()
-    #ax = fig.add_subplot(3, 4, image+1)
+    # ax = fig.add_subplot(3, 4, image+1)
     ax.set_ylabel("nm")
     ax.set_xlabel("t")
     spec = Spectrum(data)
     cleaned_data, cycle_averages = spec.return_results()
-    print(spec.peak_analysis())
+    peaks = spec.peak_analysis()
     ax.imshow(cleaned_data, norm='linear', origin='lower', aspect='auto')
     break
-    
+
 fig.tight_layout()
 plt.show()
-
-
-
