@@ -109,17 +109,16 @@ function plot_results(func, data::Spectrum, popt, yground, yamp)
     return
 end
 
-function cleandata(data::Matrix; threshold=0.92)
+function cleandata(data::Matrix; threshold=100)
     """
     Data has uniteresting down time, which gets removed due to its lower intensity
     Ground is also removed for better contrast in plot
     """
-
     ground = minimum(data, dims=1)
     _data = data .- ground
     uniformitycheck = vec(Bool.(zeros(size(data)[2])))
     for (i, spec) in enumerate(eachcol(_data))
-        uniformitycheck[i] = eval_spectralflatness(spec) .< threshold
+        uniformitycheck[i] = maximum(spec) > threshold
     end
     
     _data = _data[:,uniformitycheck]
@@ -210,7 +209,8 @@ function peak_analysis_sparse(cycles, xdata, heightfactor, widthfactor)
         spec = Spectrum(cycles[:, i], xdata)
         analysis = fit_peaks(lorentzian, spec, guess)
         block_len = Int((length(analysis)-1)/3)
-        df = DataFrame(x0 = analysis[2:block_len+1], I = analysis[block_len+2:2*block_len+1])
+        order = sortperm(analysis[2:block_len+1])
+        df = DataFrame(x0 = (analysis[2:block_len+1])[order], I = (analysis[block_len+2:2*block_len+1])[order])
         push!(peaktable, df)
     end
     return peaktable
@@ -222,10 +222,10 @@ function visualize_data(data; limit::Int64, clean::Bool, normalise::Bool)
     """
     display_data = data .- minimum(data, dims=1)
     if clean
-        display_data, uniform = cleandata(display_data, threshold = 0.9)
+        display_data, uniform = cleandata(display_data, threshold = 200)
     end
     if normalise
-        bin, wavelength_uniformity = cleandata(permutedims(data, (2,1)), threshold=0.99)
+        bin, wavelength_uniformity = cleandata(permutedims(data, (2,1)), threshold=100)
         display_data = display_data ./ maximum(display_data, dims=2)
         display_data[.!wavelength_uniformity,:].=0
     end
@@ -240,10 +240,14 @@ end
 function extract_lineactivity(data::Matrix, x_data, wavelength)
     focus = argmin(abs.(x_data .- wavelength))
     linedata = data[focus-10:focus+10, :]
-    cleanlinedata, uniformity = cleandata(linedata, threshold=0.1)
+    cleanlinedata, uniformity = cleandata(linedata, threshold=100)
     # display(heatmap(cleanlinedata, c=:grays))
     cycles = extractcycles(linedata, uniformity)
-    print(size(cycles))
+    intensity_over_cycle = zeros((size(cycles[1])[2])) # TODO find maximum length
+    #for c in cycles
+    #    intensity = sum(c, dims=1)
+    #    intensity_over_cycle = intensity_over_cycle .+ intensity
+    #end
     display(plot(cycles))
 end
 
