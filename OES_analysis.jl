@@ -7,6 +7,9 @@ using DataFrames
 using Profile
 using CSV
 using Statistics
+using Flux
+using BenchmarkTools
+
 
 function testdata_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_off=1)
     """
@@ -69,18 +72,18 @@ function fit_peaks(func::Function,  data::Spectrum, guess)
     return fit.param
 end
 
-function initial_guess(data::Spectrum, heightfactor, widthfactor)
+function initial_guess(ydata, heightfactor, widthfactor, xdata)
     """
     achieve initial guess of peak positions and parameters for fit, using local maxima of the data 
     """
-    min_prom = heightfactor * sum(abs.(diff(data.ydata)))/length(data.ydata)
+    min_prom = heightfactor * sum(abs.(diff(ydata)))/length(ydata)
     min_width = widthfactor
-    pk, vals = findmaxima(data.ydata)
-    pk, proms = peakproms!(pk, data.ydata; minprom=min_prom)
-    pk, widths, _, _ = peakwidths!(pk, data.ydata, proms; minwidth=min_width)
-    heights = data.ydata[pk]
-    pk = data.xdata[pk]
-    guess = vcat(minimum(data.ydata), pk, heights, widths)
+    pk, vals = findmaxima(ydata)
+    pk, proms = peakproms!(pk, ydata; minprom=min_prom)
+    pk, widths, _, _ = peakwidths!(pk, ydata, proms; minwidth=min_width)
+    heights = ydata[pk]
+    pk = xdata[pk]
+    guess = vcat(minimum(ydata), pk, heights, widths)
     return guess
 end
 
@@ -117,13 +120,31 @@ function cleandata(data::Matrix; threshold=100)
     ground = minimum(data, dims=1)
     _data = data .- ground
     uniformitycheck = vec(Bool.(zeros(size(data)[2])))
+    min_prom = 2*mean(data)
+    min_width = 2
     for (i, spec) in enumerate(eachcol(_data))
-        uniformitycheck[i] = maximum(spec) > threshold
+        pk, bin = findmaxima(spec)
+        # check whether the spectrum has any "actual" peaks
+        if length(pk) > 0
+            pk, proms = peakproms!(pk, spec; minprom=min_prom)
+            if length(pk) > 0
+                pk, bin, _, _ = peakwidths!(pk, spec, proms; minwidth=min_width)
+                if length(pk) > 0
+                    uniformitycheck[i] = true
+                    continue
+                end
+            end
+        end
+        uniformitycheck[i] = false
     end
     
     _data = _data[:,uniformitycheck]
     
     return _data, uniformitycheck
+end
+
+function AIbullshit()
+    model
 end
 
 function eval_spectralflatness(spectrum)
@@ -146,10 +167,12 @@ function extractcycles(data, uniformitycheck)
     indices = vcat(1, indices, length(uniformitycheck))
     cycles = []
     for i in range(1, length(indices)-1)
-        if uniformitycheck[1]==1 && i%2!=0 # check whether the first or second block is the active one
-            push!(cycles, data[:,indices[i]:indices[i+1]])
-        elseif  uniformitycheck[1]==0 && i%2==0
-            push!(cycles, data[:,indices[i]:indices[i+1]])
+        if indices[i+1] - indices[i] > 2
+            if uniformitycheck[1]==1 && i%2!=0 # check whether the first or second block is the active one
+                push!(cycles, data[:,indices[i]:indices[i+1]])
+            elseif  uniformitycheck[1]==0 && i%2==0
+                push!(cycles, data[:,indices[i]:indices[i+1]])
+            end
         end
     end
     return cycles
@@ -182,10 +205,9 @@ end
 
 function peak_analysis(func::Function, cycles, xdata, heightfactor, widthfactor)
     peaktable=[]
-    spec1 = Spectrum(cycles[:, 1], xdata)
     _multi_peak_func(x, params) = multi_peak_func(func, x, params)
     jacobian = (outjacin,p) -> ForwardDiff.jacobian!(outjacin, _multi_peak_func!, out, p)
-    guess = initial_guess(spec1, heightfactor, widthfactor) # inital peak positions that get passed thorugh every fit. conserves peak number and hopefully assignment
+    guess = initial_guess(cycles[:,1], heightfactor, widthfactor, xdata) # inital peak positions that get passed thorugh every fit. conserves peak number and hopefully assignment
     for i in range(1, size(cycles)[2])
         analysis = curve_fit(_multi_peak_func, jacobian, xdata, cycles[:, i], guess)
         analysis = analysis.param
@@ -203,9 +225,8 @@ function peak_analysis_sparse(cycles, xdata, heightfactor, widthfactor)
     peaktable=[]
     spec1 = Spectrum(cycles[:, 1], xdata)
     # jacobian = (outjacin,p) -> ForwardDiff.jacobian!(outjacin, f!, out, p)
-    guess = initial_guess(spec1, heightfactor, widthfactor) # inital peak positions that get passed thorugh every fit. conserves peak number and hopefully assignment
+    guess = initial_guess(cycles[:,1], heightfactor, widthfactor, xdata) # inital peak positions that get passed thorugh every fit. conserves peak number and hopefully assignment
     for i in (1, size(cycles)[2])
-        print(i)
         spec = Spectrum(cycles[:, i], xdata)
         analysis = fit_peaks(lorentzian, spec, guess)
         block_len = Int((length(analysis)-1)/3)
@@ -241,13 +262,18 @@ function extract_lineactivity(data::Matrix, x_data, wavelength)
     focus = argmin(abs.(x_data .- wavelength))
     linedata = data[focus-10:focus+10, :]
     cleanlinedata, uniformity = cleandata(linedata, threshold=100)
-    # display(heatmap(cleanlinedata, c=:grays))
+    display(heatmap(cleanlinedata, c=:grays))
     cycles = extractcycles(linedata, uniformity)
-    intensity_over_cycle = zeros((size(cycles[1])[2])) # TODO find maximum length
-    #for c in cycles
-    #    intensity = sum(c, dims=1)
-    #    intensity_over_cycle = intensity_over_cycle .+ intensity
-    #end
+    lengths = []
+    for c in cycles
+        push!(lengths, size(c)[2])
+    end
+    print(lengths)
+    intensity_over_cycle = zeros(maximum(lengths))
+    for c in cycles
+        intensity = sum(c, dims=1)
+        #intensity_over_cycle = intensity_over_cycle .+ intensity
+    end
     display(plot(cycles))
 end
 
@@ -260,10 +286,10 @@ function analyse_folder()
         x_data = data[:,2]
         data = data[:,5:end]
         cleaned_data, uniformity = cleandata(data)
-        display_data = visualize_data(data, limit=0, clean=true, normalise=false)
-        # display(heatmap(display_data, c=:grays))
+        display_data = visualize_data(data, limit=0, clean=true, normalise=true)
+        display(heatmap(display_data, c=:grays))
         cycles = extractcycleaverages(data, uniformity)
-        extract_lineactivity(data, x_data, 810)
+        # extract_lineactivity(data, x_data, 810)
         #peaks_data = peak_analysis_sparse(cycles, x_data, 3, 3)
         #refined_peaks = DataFrame(x0 = vec(peaks_data[1].x0), I_ratio=vec(peaks_data[1].I./peaks_data[2].I), 
         #δx0 = vec(peaks_data[1].x0.-peaks_data[2].x0))
@@ -273,5 +299,4 @@ function analyse_folder()
         break
     end
 end
-
 analyse_folder()
