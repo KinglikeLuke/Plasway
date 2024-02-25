@@ -9,7 +9,9 @@ using CSV
 using Statistics
 using Flux
 using BenchmarkTools
-
+using Flux: crossentropy, Momentum
+using CUDA
+using BSON
 
 function testdata_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_off=1)
     """
@@ -21,10 +23,11 @@ function testdata_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_of
     off = (randn().+mean_off).*mean_off/5
     x0 = rand(1:x_max, n_peaks)
     I = (randn(n_peaks).+ 1).*mean_I .+ mean_I .+ 1
-    fwhm = randn(n_peaks).*mean_fwhm/5 .+mean_fwhm
+    fwhm = (randn(n_peaks).*mean_fwhm/3 .+mean_fwhm)
+    # fwhm[fwhm .< 0] .= 0 WTF
     params = vcat(off, x0, I, fwhm)
-    ydata = multi_peak_func(lorentzian, x, params) + randn(length).*0.1
-    return Spectrum(ydata, x)
+    ydata = multi_peak_func(lorentzian, x, params) + randn(length).*0.1 .+ 1
+    return ydata, x
     # testing = FindPeaks(y_data)
     # assert testing.i_x0 - x0 < fwhm
 end
@@ -93,7 +96,6 @@ function plot_results(func, data::Spectrum, popt, yground, yamp)
     p1 = scatter(data.xdata, data.ydata, ms=0.8)
     p2 = scatter(data.xdata, yground .+ yamp .* data.ydata, ms=0.8)
     x0 = popt[2:Int((length(popt)-1)/3)+1]
-    print(x0)
     if length(popt) > 1    
         x0_fit = zeros(0)
         plot_fit = zeros(0)
@@ -119,32 +121,72 @@ function cleandata(data::Matrix; threshold=100)
     """
     ground = minimum(data, dims=1)
     _data = data .- ground
-    uniformitycheck = vec(Bool.(zeros(size(data)[2])))
-    min_prom = 2*mean(data)
-    min_width = 2
+    n_observations = size(data)[2]
+    uniformitycheck = vec(Bool.(zeros(n_observations)))
+    BSON.@load "spec_recognition.bson" model
+    features = zeros((4, n_observations))
     for (i, spec) in enumerate(eachcol(_data))
-        pk, bin = findmaxima(spec)
-        # check whether the spectrum has any "actual" peaks
-        if length(pk) > 0
-            pk, proms = peakproms!(pk, spec; minprom=min_prom)
-            if length(pk) > 0
-                pk, bin, _, _ = peakwidths!(pk, spec, proms; minwidth=min_width)
-                if length(pk) > 0
-                    uniformitycheck[i] = true
-                    continue
-                end
-            end
-        end
-        uniformitycheck[i] = false
+        features[:, i] = calculate_features(spec)
     end
+    
+    uniformitycheck = (model(features)[1,:] .> 0.5)
+    
     
     _data = _data[:,uniformitycheck]
     
     return _data, uniformitycheck
 end
 
+function calculate_features(spec)
+    return [mean(spec), maximum(spec), var(spec), exp(mean(log.(abs.(spec))))]
+end
+
 function AIbullshit()
-    model
+    # spectrum_params: mean, max, var, geom_mean
+    function generate_training_data(half_length::Int)
+        active = rand(1:20, half_length)
+        spec_length = 400
+        x = zeros((4, 2*half_length))
+        y = zeros(2*half_length)
+        for (i, spec) in enumerate(active)
+            active_spec, bin = testdata_lorentzian(spec, spec_length)
+            passive_spec = randn(spec_length).*0.1 .+ randn(1)*0.2 .+ 1
+            x[:,2*i] = calculate_features(active_spec)
+            x[:,2*i-1] = calculate_features(passive_spec)
+            y[2*i] = true
+            y[2*i-1] = false
+        end
+        return x, y
+    end
+    x_train, y_train = generate_training_data(1000)
+    x_test, y_test = generate_training_data(200)
+    input_size = size(x_train, 1)  # Number of features in each spectrum
+    output_size = 2  # Two classes: active and silent
+
+    model = Chain(
+        Dense(input_size, 30, relu),
+        BatchNorm(30),
+        Dense(30, 2),
+        softmax
+        )|> gpu;
+
+    loss(x, y) = crossentropy(model(x), y)
+    optim = Flux.setup(Flux.Adam(0.01), model)
+
+    target = Flux.onehotbatch(y_train, [true, false])                   # 2×200 OneHotMatrix
+    loader = Flux.DataLoader((x_train, target) |> gpu, batchsize=50, shuffle=true);
+    for epoch in 1:1000
+        Flux.train!(model, loader, optim) do m, x, y
+            y_hat = m(x)
+            Flux.crossentropy(y_hat, y)
+        end
+    end
+    model = model |> cpu
+
+    out2 = model(x_test)  # first row is prob. of true, second row p(false)
+
+    print(mean((out2[1,:] .> 0.5) .== y_test))  # accuracy 94% so far!
+    BSON.@save "spec_recognition.bson" model
 end
 
 function eval_spectralflatness(spectrum)
@@ -268,7 +310,6 @@ function extract_lineactivity(data::Matrix, x_data, wavelength)
     for c in cycles
         push!(lengths, size(c)[2])
     end
-    print(lengths)
     intensity_over_cycle = zeros(maximum(lengths))
     for c in cycles
         intensity = sum(c, dims=1)
@@ -286,7 +327,7 @@ function analyse_folder()
         x_data = data[:,2]
         data = data[:,5:end]
         cleaned_data, uniformity = cleandata(data)
-        display_data = visualize_data(data, limit=0, clean=true, normalise=true)
+        display_data = visualize_data(data, limit=0, clean=true, normalise=false)
         display(heatmap(display_data, c=:grays))
         cycles = extractcycleaverages(data, uniformity)
         # extract_lineactivity(data, x_data, 810)
