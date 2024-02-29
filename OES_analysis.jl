@@ -12,6 +12,7 @@ using BenchmarkTools
 using Flux: crossentropy, Momentum
 using CUDA
 using BSON
+using Interpolations
 
 function testdata_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_off=1)
     """
@@ -26,7 +27,7 @@ function testdata_lorentzian(n_peaks, length=200, mean_I=1, mean_fwhm=2, mean_of
     fwhm = (randn(n_peaks).*mean_fwhm/3 .+mean_fwhm)
     # fwhm[fwhm .< 0] .= 0 WTF
     params = vcat(off, x0, I, fwhm)
-    ydata = multi_peak_func(lorentzian, x, params) + randn(length).*0.1 .+ 1
+    ydata = (multi_peak_func(lorentzian, x, params) + randn(length).*0.1 .+ 1).*rand(1:10000)
     return ydata, x
     # testing = FindPeaks(y_data)
     # assert testing.i_x0 - x0 < fwhm
@@ -143,24 +144,28 @@ end
 
 function AIbullshit()
     # spectrum_params: mean, max, var, geom_mean
-    function generate_training_data(half_length::Int)
+    function generate_training_data(half_length::Int, max_spec_length)
         active = rand(1:20, half_length)
-        spec_length = 400
+        spec_length = rand(200:max_spec_length, half_length)
         x = zeros((4, 2*half_length))
         y = zeros(2*half_length)
+        x_standard = range(0, max_spec_length)
         for (i, spec) in enumerate(active)
-            active_spec, bin = testdata_lorentzian(spec, spec_length)
-            passive_spec = randn(spec_length).*0.1 .+ randn(1)*0.2 .+ 1
-            x[:,2*i] = calculate_features(active_spec)
-            x[:,2*i-1] = calculate_features(passive_spec)
+            active_spec, x_spec = testdata_lorentzian(spec, spec_length[i])
+            passive_spec = (randn(spec_length[i]).*0.1 .+ randn(1)*0.2 .+ 1).*rand(1:10000)
+            interp_active = linear_interpolation(x_spec.*(spec_length[i]/max_spec_length), active_spec)
+            x[:,2*i] = interp_active(x_standard)
+            x[:,2*i-1] = linear_interpolation(x*spec_length[i]/max_spec_length, passive_spec)(x_standard)
             y[2*i] = true
             y[2*i-1] = false
         end
         return x, y
     end
-    x_train, y_train = generate_training_data(1000)
-    x_test, y_test = generate_training_data(200)
+    max_spec_length = 5000
+    x_train, y_train = generate_training_data(1000, max_spec_length)
+    x_test, y_test = generate_training_data(200, max_spec_length)
     input_size = size(x_train, 1)  # Number of features in each spectrum
+    print(input_size==max_spec_length)
     output_size = 2  # Two classes: active and silent
 
     model = Chain(
@@ -180,12 +185,12 @@ function AIbullshit()
             y_hat = m(x)
             Flux.crossentropy(y_hat, y)
         end
+        
     end
     model = model |> cpu
 
     out2 = model(x_test)  # first row is prob. of true, second row p(false)
-
-    print(mean((out2[1,:] .> 0.5) .== y_test))  # accuracy 94% so far!
+    print(mean((out2[1,:] .> 0.5) .== y_test)) 
     BSON.@save "spec_recognition.bson" model
 end
 
@@ -340,4 +345,5 @@ function analyse_folder()
         break
     end
 end
+AIbullshit()
 analyse_folder()
