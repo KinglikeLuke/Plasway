@@ -6,22 +6,24 @@ import pickle
 file_location = "\Dokumente\Privat\Plasway\Al2O3 Process Data"
 files = glob.glob(file_location+"\*.csv")
 skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
-store = pd.HDFStore("good_process.h5")
+store = pd.HDFStore("good_process_spectra.h5")
 
 def loadfiles(files):
+    """
+    load all files in the designated path into a very big df, store that for easier access later
+    """
     for file in files:
         df = pd.read_csv(file, skiprows=skiprows, engine="c", header=0, na_values=[' '], dtype=np.float64)
-        #df.dropna(inplace=True)
-        store["df"] = df
+        return df
 
-def process_store():
+def process_store(files):
     """
     If store is still the full dataset as loaded, this will split it into a part dedicated to the spectrum (an in the process halfing the size of the file,
     because that is terribly memory inefficient and stores the utterly redundant information about pixel-wavelength assignment at every timestep) and a much
     smaller part dedicated to all other variables, which are also grouped according to their observation interval. 
     should do nothing, if store was already processed
     """
-    df = store["df"]
+    df = loadfiles(files)
     # see if the df was processed already
     try:
         df.columns.get_loc("aWavelengthIntensity ")
