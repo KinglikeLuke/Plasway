@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.axes._axes import Axes
 from scipy import signal
 import os
+import warnings
 
 def loadfiles(file, skiprows):
     """
@@ -134,7 +135,8 @@ def main():
         loaded_dict = pickle.load(f)
     print("Opened file: {}".format(os.path.basename(files[0])))        
     SetPoint14 = loaded_dict[7110]["reaPositionSetPoint (14)"]
-    season_times = find_seasons(SetPoint14)
+    with warnings.catch_warnings(action="ignore"):
+        season_times = find_seasons(SetPoint14)
     while True:
         print("available measurement series sizes: {}".format(list(loaded_dict.keys())))
         dict_key = int(input("Which series do you want to consider? "))
