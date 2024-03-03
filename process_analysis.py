@@ -22,7 +22,7 @@ def process_store(files, skiprows, store):
     smaller part dedicated to all other variables, which are also grouped according to their observation interval. 
     should do nothing, if store was already processed
     """
-    df = loadfiles(files, skiprows)
+    df = loadfiles(files[0], skiprows)  # TODO allow for reading of multiple files?
     # see if the df was processed already
     try:
         df.columns.get_loc("aWavelengthIntensity ")
@@ -45,6 +45,8 @@ def process_store(files, skiprows, store):
     # structure: {7000: n*7000 df, 70000: n*70000 df, ...}
     for i in range(0, len(df.columns), 2):
         df_col = df.iloc[:,i+1]
+        if np.all(df_col.values==0):    # If all values are 0, skip adding that column to the data
+            continue
         df_col_timestamps = df.iloc[:,i]
         df_col.index = df_col_timestamps    # set timestamps as indices instead
         df_col.dropna(inplace=True)
@@ -101,26 +103,62 @@ def analyse_seasons(series:pd.Series, season_times):
         truncated_seasons[i,:] = df_season.values
     mean = sum/season_number
     analysis_df = pd.DataFrame(data=mean, index=shortest_season_indices)
-    var = np.sqrt(np.sum((truncated_seasons-mean)^2, axis=1)/season_number) # not quite the variance, quantifies the difference of the whole season from the mean
-    
+    deviation_from_mean = truncated_seasons - mean
+    var = np.sqrt(np.sum(deviation_from_mean**2, axis=1)/season_number) # not quite the variance, quantifies the difference of the whole season from the mean
     return seasons, analysis_df
         
-        
+def display_data(loaded_dict:dict, dict_key:int, table_key:str, season_times):
+    """Somewhat prototypical action on interaction: plot and (as yet unreturned) data-analysis
+
+    Args:
+        loaded_dict (dict): The data in form of a dictionary
+        dict_key (int): which entry of the dictionary one wants to look at
+        table_key (_type_): which column of the data frame is interesting
+        season_times (_type_): the times at which cycles in the data repeat
+    """
+    fig = plt.figure()
+    ax = fig.subplots()
+    series = loaded_dict[dict_key][table_key]
+    seasons, mean_season = analyse_seasons(series, season_times)
+    plot_seasons(seasons, mean_season, ax)
+    plt.show()
+    
 def main():
+    # TODO interactive file loading. Might make problem with opening multiple files moot, as you would just select multiple
     file_location = "\Dokumente\Privat\Plasway\Al2O3 Process Data"
     files = glob.glob(file_location+"\*.csv")
     skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
     store = pd.HDFStore("good_process_spectra.h5")
+    # process_store(files, skiprows, store) # only for loading a new file!
     with open('non_spectra.pkl', 'rb') as f:
         loaded_dict = pickle.load(f)
-    print("Opened file:{}".format(os.path.basename(files[0])))        
+    print("Opened file: {}".format(os.path.basename(files[0])))        
     SetPoint14 = loaded_dict[7110]["reaPositionSetPoint (14)"]
     season_times = find_seasons(SetPoint14)
-    pressure_series = loaded_dict[71084]["reaActualPressure_mbar"]
-    fig = plt.figure()
-    ax = fig.subplots()
-    seasons, mean_season = analyse_seasons(SetPoint14, season_times)
-    plot_seasons(seasons, mean_season, ax)
-    plt.show()
+    while True:
+        print("available measurement series sizes: {}".format(list(loaded_dict.keys())))
+        dict_key = int(input("Which series do you want to consider? "))
+        try: 
+            loaded_dict[dict_key]
+        except KeyError:
+            print("Please choose a valid key.")
+            continue
+        print("Measurements in this series:")
+        for i in sorted(list(loaded_dict[dict_key])):
+            print(i)
+        table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
+        if table_key=='return':
+            continue
+        while True:
+            try:
+                loaded_dict[dict_key][table_key]
+            except KeyError:
+                table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
+                continue
+            break
+        display_data(loaded_dict, dict_key, table_key, season_times)
+        end = input("End program? [y/n] ")
+        if end == 'y':
+            break
 
 main()
