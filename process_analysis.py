@@ -12,10 +12,10 @@ def loadfiles(file, skiprows):
     """
     load all files in the designated path into a very big df
     """
-    df = pd.read_csv(file, skiprows=skiprows, engine="c", header=0, na_values=[' '], dtype=np.float32)
+    df = pd.read_csv(file, skiprows=skiprows, engine="c", header=0, na_values=[' ', 'EOF'], dtype=np.float32)
     return df
 
-def process_store(files, skiprows, store):
+def process_store(file, skiprows, store):
     """
     files: list of filepaths to read
     If store is still the full dataset as loaded, this will split it into a part dedicated to the spectrum (an in the process halfing the size of the file,
@@ -23,34 +23,36 @@ def process_store(files, skiprows, store):
     smaller part dedicated to all other variables, which are also grouped according to their observation interval. 
     should do nothing, if store was already processed
     """
-    df = loadfiles(files[0], skiprows)  # TODO allow for reading of multiple files?
+    df = loadfiles(file, skiprows)  # TODO allow for reading of multiple files?
     # see if the df was processed already
+    spectrum = True
     try:
         df.columns.get_loc("aWavelengthIntensity ")
     except KeyError:
-        return
-    # Move the Spectrum to its own df
-    spec_intensities_start = df.columns.get_loc("aWavelengthIntensity ")
-    spec_wavelengths_start = df.columns.get_loc("aWavelengthRange ")
-    spec_wavelengths_end = df.columns.get_loc("O2Intnsty") - 1
-    spec_intensities = df.iloc[:, spec_intensities_start:spec_wavelengths_start - 1]
-    spec_wavelengths = df.iloc[0, spec_wavelengths_start:spec_wavelengths_end]
-    col_labels = spec_wavelengths.values.tolist()
-    index_labels = df.iloc[:,spec_intensities_start-1].tolist()
-    spec_intensities.columns = col_labels
-    spec_intensities.index = index_labels
-    store["df"] = spec_intensities
-    df.drop(df.columns[spec_intensities_start - 1:spec_wavelengths_end], axis=1, inplace=True)
+        spectrum = False
+    if spectrum:
+        # Move the Spectrum to its own df
+        spec_intensities_start = df.columns.get_loc("aWavelengthIntensity ")
+        spec_wavelengths_start = df.columns.get_loc("aWavelengthRange ")
+        spec_wavelengths_end = df.columns.get_loc("O2Intnsty") - 1
+        spec_intensities = df.iloc[:, spec_intensities_start:spec_wavelengths_start - 1]
+        spec_wavelengths = df.iloc[0, spec_wavelengths_start:spec_wavelengths_end]
+        col_labels = spec_wavelengths.values.tolist()
+        index_labels = df.iloc[:,spec_intensities_start-1].tolist()
+        spec_intensities.columns = col_labels
+        spec_intensities.index = index_labels
+        store["df"] = spec_intensities
+        df.drop(df.columns[spec_intensities_start - 1:spec_wavelengths_end], axis=1, inplace=True)
     # group observables according to measurement intervals
     datasets = {} # list of all different lengths of datasets
     # structure: {7000: n*7000 df, 70000: n*70000 df, ...}
     for i in range(0, len(df.columns), 2):
         df_col = df.iloc[:,i+1]
-        if np.all(df_col.values==0):    # If all values are 0, skip adding that column to the data
-            continue
         df_col_timestamps = df.iloc[:,i]
         df_col.index = df_col_timestamps    # set timestamps as indices instead
         df_col.dropna(inplace=True)
+        if np.all(df_col.values < 0.001):    # If all values are 0, skip adding that column to the data
+            continue
         if df_col.size in datasets:
             datasets[df_col.size] = pd.concat([datasets[df_col.size], df_col], axis=1) # add the column to the dataframe of that length
         else:
@@ -68,10 +70,14 @@ def find_seasons(series:pd.Series):
     min_time = 200 # minimum accepted cycle length in ms
     autocorr = np.zeros(len(series))
     # TODO find a way to avoid loops here
-    for i in range(len(series)):
-        autocorr[i] = series.autocorr(lag=i)
+    autocorr = signal.correlate(series, series)[len(series)-1:]
     delta_t = series.index[1] - series.index[0]
-    min_distance = min_time/delta_t  
+    min_distance = min_time/delta_t
+    plt.plot(series)
+    #print(np.size(autocorr))
+    plt.plot(series.index, autocorr/np.max(autocorr))
+    plt.show()  
+    # Maybe find maximum number of peaks of identical maximum height, use that as seasons?
     seasonal_indices = signal.find_peaks(autocorr, height=0.95, distance = min_distance, width=5)[0] # find the indices at the peaks of the autocorrelation
     return series.index[seasonal_indices]
 
@@ -84,9 +90,10 @@ def plot_seasons(seasons, season_statistics, ax: Axes):
         ax (Axes): plot area
     """
     # get the shortest season for initialising array for calculating mean value over seasons
-    
-    for i in seasons:
-        ax.plot(i, c='lightsteelblue', alpha = 0.7)
+    alpha_0 = 0.5
+    alpha_inc = (1-alpha_0)/len(seasons)
+    for i, s in enumerate(seasons):
+        ax.plot(s, c='lightsteelblue', alpha = alpha_0 + i*alpha_inc)
     ax.plot(season_statistics, c='navy')
 
 def analyse_seasons(series:pd.Series, season_times):
@@ -119,24 +126,56 @@ def display_data(loaded_dict:dict, dict_key:int, table_key:str, season_times):
     """
     fig = plt.figure()
     ax = fig.subplots()
+    ax.set_xlabel("t/ms")
+    ax.set_title(table_key)
     series = loaded_dict[dict_key][table_key]
     seasons, mean_season = analyse_seasons(series, season_times)
     plot_seasons(seasons, mean_season, ax)
     plt.show()
     
-def main():
-    # TODO interactive file loading. Might make problem with opening multiple files moot, as you would just select multiple
-    file_location = "\Dokumente\Privat\Plasway\Al2O3 Process Data"
+def enter_file(file_location=None):
+    #D:\Local\Analysis\202402 Al2O3
+    if not file_location:
+        file_location = input("Specify folder path: ")
+        try:
+            glob.glob(file_location+"\*.csv")[0]
+        except:
+            print("No valid files at this path!")
+            return 0
     files = glob.glob(file_location+"\*.csv")
-    skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
-    store = pd.HDFStore("good_process_spectra.h5")
-    # process_store(files, skiprows, store) # only for loading a new file!
+    print("Available files:")
+    for i in sorted(files):
+        print(os.path.basename(i))
+    filepath = os.path.join(file_location, input("Which file do you want to load? "))
+    if not filepath in files:
+        print("Please choose a file in the path")
+        filepath = enter_file(file_location)       # Go back to selection from folder
+    return filepath
+    
+
+def main():
+    """
+    Interesting comparisons: Input MFC needle ("reaPosSetpoint (34)"), Output MFC needle("reaPosSetpoint (30)"), O2Flow, Pressure, oxygen/argon "reaActFlo(35)" flow ratio
+    """
+    # TODO interactive file loading. Might make problem with opening multiple files moot, as you would just select multiple
+    loading = input("Do you want to load a new file?[y/n]" )
+    if loading == 'y':
+        while True:
+            filepath = enter_file()
+            if filepath:
+                break
+        skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
+        store = pd.HDFStore("good_process_spectra.h5")
+        process_store(filepath, skiprows, store) # only for loading a new file!
+
     with open('non_spectra.pkl', 'rb') as f:
         loaded_dict = pickle.load(f)
-    print("Opened file: {}".format(os.path.basename(files[0])))        
-    SetPoint14 = loaded_dict[7110]["reaPositionSetPoint (14)"]
+    #print("Opened file: {}".format(os.path.basename(files[0])))
+    order_df_key = min(list(loaded_dict.keys()))       
+    season_gauge = loaded_dict[order_df_key].iloc[:,4]
+    print(loaded_dict[order_df_key].columns)
     with warnings.catch_warnings(action="ignore"):
-        season_times = find_seasons(SetPoint14)
+        season_times = find_seasons(season_gauge)
     while True:
         print("available measurement series sizes: {}".format(list(loaded_dict.keys())))
         dict_key = int(input("Which series do you want to consider? "))
