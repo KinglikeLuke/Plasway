@@ -1,4 +1,5 @@
 import glob
+import math
 import os
 from pathlib import Path
 import warnings
@@ -19,8 +20,7 @@ def loadfiles(file, skiprows):
 def process_csv(filepath, skiprows, target_folder):
     """
     file: absolute path to file to read
-    If store is still the full dataset as loaded, this will split it into a part dedicated to the spectrum (an in the process halfing the size of the file,
-    because that is terribly memory inefficient and stores the utterly redundant information about pixel-wavelength assignment at every timestep) and a much
+    If store is still the full dataset as loaded, this will split it into a part dedicated to the spectrum and a much
     smaller part dedicated to all other variables, which are also grouped according to their observation interval. 
     should do nothing, if store was already processed
     """
@@ -30,6 +30,7 @@ def process_csv(filepath, skiprows, target_folder):
         os.mkdir(target_folder)
     # Check if this file was already read in, if yes, skip this whole mess
     if os.path.isfile(target_filename):
+        print("File already loaded")
         return target_filename
     df = loadfiles(filepath, skiprows)  # TODO allow for reading of multiple files?
     # see if the df has a spectrum part
@@ -61,8 +62,10 @@ def process_csv(filepath, skiprows, target_folder):
         pickle.dump(datasets, pickle_file)
     return target_filename
 
-def process_spectrum(df, file, target_folder):
-    """Cleans up the spectrum file somewhat and moves it into its own store. Drops those files from the spectrum
+def process_spectrum(df:pd.DataFrame, file, target_folder):
+    """Cleans up the spectrum file somewhat (in the process halfing the size of the file,
+    because that is terribly memory inefficient and stores the utterly redundant information about 
+    pixel-wavelength assignment at every timestep) and moves it into its own store. Drops those files from the spectrum
 
     Args:
         df (_type_): _description_
@@ -79,6 +82,7 @@ def process_spectrum(df, file, target_folder):
     spec_intensities.columns = col_labels
     spec_intensities.index = index_labels
     store["df"] = spec_intensities
+    store.close()
     df.drop(df.columns[spec_intensities_start - 1:spec_wavelengths_end], axis=1, inplace=True)
     return df
 
@@ -99,31 +103,13 @@ def find_seasons(df:pd.DataFrame):
         if len(seasonal_indices) > len(seasonal_indices_old):   # The most seasons are likely the most accurate
             seasonal_indices_old = seasonal_indices
     return df.index[seasonal_indices_old[:-2]] # last index is not really a cycle due to the tail of the recording
-
-def enter_file(file_location=None):
-    #D:\Local\Analysis\202402 Al2O3
-    if not file_location:
-        file_location = input("Specify folder path: ")
-        try:
-            glob.glob(file_location+"\*.csv")[0]
-        except IndexError:
-            print("No valid files at this path!")
-            return
-    files = glob.glob(file_location+"\*.csv")
-    print("Available files:")
-    for i in sorted(files):
-        print(os.path.basename(i))
-    filepath = os.path.join(file_location, input("Which file do you want to load? "))
-    if not filepath in files:
-        print("Please choose a file in the path")
-        filepath = enter_file(file_location)       # Go back to selection from folder
-    return filepath
     
 class Process:
     """Very prototype class for managing Process data
     """
-    def __init__(self, loaded_dict, season_times) -> None:
+    def __init__(self, loaded_dict, season_times, name) -> None:
         self.loaded_dict = loaded_dict
+        self.name = name
         self._season_times = season_times
     
     @classmethod
@@ -143,22 +129,8 @@ class Process:
         season_gauge = loaded_dict[order_df_key]
         with warnings.catch_warnings(action="ignore"):
             season_times = find_seasons(season_gauge)
-        process1_dict = cls(loaded_dict, season_times)
+        process1_dict = cls(loaded_dict, season_times, os.path.basename(filename))
         return process1_dict
-    
-    @classmethod
-    def from_csv(cls, filepath:str, target_folder:str):
-        """If Process data is not yet read in, parse the csv containing the data, create a pkl file
-
-        Args:
-            filepath (str): the path to the folder with the csv file
-
-        Returns:
-            _type_: class Process with dict and season times
-        """
-        skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
-        filename = process_csv(filepath, skiprows, target_folder)
-        return(cls.from_pkl(filename))
     
     def plot_seasons(self, seasons, season_statistics, ax: Axes):
         """Takes in a pd Series and some cyclicity determined elsewhere and plots it so that the seasons overlap
@@ -207,7 +179,7 @@ class Process:
         var = np.sqrt(np.sum(deviation_from_mean**2, axis=1)/season_number) # not quite the variance, quantifies the difference of the whole season from the mean
         return seasons, analysis_df
         
-    def display_data(self, dict_key:int, table_key:str):
+    def display_data(self, dict_key:int, table_key:str, ax = None):
         """Somewhat prototypical action on interaction: plot and (as yet unreturned) data-analysis
 
         Args:
@@ -216,35 +188,140 @@ class Process:
         """
         seasons, mean_season = self.analyse_seasons(dict_key, table_key)
         plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.cool(np.linspace(0.01,1,len(seasons))))
-        fig = plt.figure()
-        ax = fig.subplots()
-        ax.set_xlabel("t/ms")
-        ax.set_title(table_key)
-        ax.set_xlim(mean_season.index[0] - 20, mean_season.index[-1] + 20)
+        if not ax:
+            fig = plt.figure()
+            ax = fig.subplots()
+            ax.set_xlabel("t/ms")
+            ax.set_title(table_key)
+            ax.set_xlim(mean_season.index[0] - 20, mean_season.index[-1] + 20)
         self.plot_seasons(seasons, mean_season, ax)
         ax.legend()
-        plt.show()
+
+def pkl_from_csv(filepath:str, target_folder:str):
+    """If Process data is not yet read in, parse the csv containing the data, create a pkl file
+
+    Args:
+        filepath (str): the path to the folder with the csv file
+
+    Returns:
+        _type_: class Process with dict and season times
+    """
+    skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
+    process_csv(filepath, skiprows, target_folder)
+
+def enter_file(extension:str, file_location=None):
+    """Gets user to open a file of given type in given folder
+
+    Args:
+        suffix (str): file extension, with dot
+        file_location (_type_, optional): _description_. Defaults to None.
+
+    Returns:
+        _type_: _description_
+    """
+    #D:\Local\Analysis\202402 Al2O3
+    if not file_location:
+        file_location = input("Specify folder path: ")
+    try:
+        glob.glob(file_location+f"\\*{extension}")[0]
+    except IndexError:
+        print("No valid files at this path!")
+        return enter_file(extension, None)
+    files = glob.glob(file_location+f"\\*{extension}")
+    print("Available files:")
+    for i in sorted(files):
+        print(os.path.basename(i))
+    filepath = os.path.join(file_location, input("Which file do you want to load? "))
+    while not filepath in files:
+        print("Please choose a file in the path")
+        filepath = os.path.join(file_location, input("Which file do you want to load? "))
+    return filepath
+
+def find_dict_key(process:Process, table_key):
+    """Looks for a table key in the entirety of the data of process, returns first found instance
+
+    Args:
+        process (Process): _description_
+        table_key (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    for key in process.loaded_dict:
+        if table_key in process.loaded_dict[key]:
+            return key
+
+def comparison(table_key, *processes:Process):
+    """Compares the same measurement in two different processes
+
+    Args:
+        table_key (_type_): _description_
+    """
+    fig = plt.figure(figsize = (20,10))
+    plotcount = math.factorial(len(processes) - 1) + 1
+    print(plotcount)
+    ax1 = fig.add_subplot(1, plotcount, 1)
+    ax1.set_title("Full data")
+    means = []
+    for process in processes:
+        dict_key = find_dict_key(process, table_key)
+        if not dict_key:
+            print("Measurement not in both datasets!")
+            return
+        _seasons, _mean = process.analyse_seasons(dict_key, table_key)
+        means.append(_mean)
+        process.display_data(dict_key, table_key, ax=ax1)
+        
+    index = 2
+    for i in range(len(means)):
+        for j in range(len(means)):
+            if j > i:
+                _ax = fig.add_subplot(1, plotcount, index)
+                comparison_plot = means[0] - means[1]
+                _ax.plot(comparison_plot)
+                _ax.set_title(f"{processes[i].name} and {processes[j].name}")
+                index += 1
+    fig.tight_layout()
+    plt.show()
 
 def main():
     """
     Interesting comparisons: Input MFC needle ("reaPosSetpoint (34)"), Output MFC needle("reaPosSetpoint (30)"), O2Flow, Pressure, oxygen/argon "reaActFlo(35)" flow ratio
     """
     # TODO interactive file loading. Might make problem with opening multiple files moot, as you would just select multiple
-    loading = input("Do you want to read a new file?[y/n]" )
-    if loading == 'y':
+    loadpath = None # path to pkl file folder
+    loadnames = [] # path to pkl file
+    filepath = None # path to csv file
+    processes = []
+    reading = input("Do you want to read a new file?[y/n]" )
+    while reading == 'y':
         while True:
-            filepath = enter_file()
+            filepath = enter_file(".csv")
             if filepath:
                 break
-        process = Process.from_csv(filepath, target_folder=os.path.join(os.path.dirname(filepath), "process_data"))
-
-    process = Process.from_pkl("non_spectra.pkl")
+        pkl_from_csv(filepath, target_folder=os.path.join(os.path.dirname(filepath), "processed_data"))
+        reading = input("Do you want to read another file? [y/n]")
     
+    loading = "y"
+    if filepath:
+        loadpath = os.path.join(os.path.dirname(filepath), "processed_data")
+        print(f"Loading files from {loadpath}")
+    while loading == "y":
+        loadname = enter_file(".pkl", file_location=loadpath)
+        loadnames.append(loadname)
+        print(f"Loaded files: {[os.path.basename(name) for name in loadnames]}")
+        loadpath = os.path.dirname(loadname)
+        loading = input("Load another file?[y/n]")
+    
+    for i in loadnames:
+        processes.append(Process.from_pkl(i))
+        
     while True:
-        print(f"available measurement series sizes: {list(process.loaded_dict.keys())}")
+        
+        print(f"available measurement series sizes: {list(processes[0].loaded_dict.keys())}")
         dict_key = input("Which series do you want to consider? ")
-        try: 
-            process.loaded_dict[int(dict_key)]
+        try:
+            processes[0].loaded_dict[int(dict_key)]
         except KeyError:
             print("Please choose a valid key.")
             continue
@@ -253,21 +330,28 @@ def main():
             continue
         dict_key = int(dict_key)
         print("Measurements in this series:")
-        for i in sorted(list(process.loaded_dict[dict_key])):
+        for i in sorted(list(processes[0].loaded_dict[dict_key])):
             print(i)
         table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
         if table_key=='return':
             continue
         while True:
             try:
-                process.loaded_dict[dict_key][table_key]
+                processes[0].loaded_dict[dict_key][table_key]
             except KeyError:
                 table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
                 continue
             break
-        process.display_data(dict_key, table_key)
+        comparison(table_key, *processes)
         end = input("End program? [y/n] ")
         if end == 'y':
             break
 
-main()
+def testing_comp():
+    processes = []
+    names = [r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\\20240305_2_Al2O3+ExtraBias.pkl", r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\20240305_1_Al2O3_REP.pkl"]
+    for i in names:
+        processes.append(Process.from_pkl(i))
+    comparison("reaPositionSetPoint (30)" ,*processes)
+
+testing_comp()
