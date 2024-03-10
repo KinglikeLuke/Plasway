@@ -10,6 +10,8 @@ from matplotlib.axes._axes import Axes
 from scipy import signal
 import pandas as pd
 
+plt.rcParams["axes.grid"] = True
+plt.rcParams["grid.linewidth"] = 0.75
 def loadfiles(file, skiprows):
     """
     load all files in the designated path into a very big df
@@ -97,12 +99,13 @@ def find_seasons(df:pd.DataFrame):
     delta_t = df.index[1] - df.index[0]
     min_distance = min_time/delta_t
     autocorr = autocorr/np.max(autocorr, axis=0)
-    seasonal_indices_old = []
-    for column in autocorr.T:
-        seasonal_indices = signal.find_peaks(column, distance = min_distance, width=min_distance/2)[0] # find the indices at the peaks of the autocorrelation
-        if len(seasonal_indices) > len(seasonal_indices_old):   # The most seasons are likely the most accurate
-            seasonal_indices_old = seasonal_indices
-    return df.index[seasonal_indices_old[:-2]] # last index is not really a cycle due to the tail of the recording
+    seasonal_indices = []
+    for i, autocorr_column in enumerate(autocorr.T):
+        seasonal_indices_new = signal.find_peaks(autocorr_column, distance = min_distance, width=min_distance/3)[0] # find the indices at the peaks of the autocorrelation
+        if len(seasonal_indices_new) > len(seasonal_indices):   # The most seasons are likely the most accurate
+            x = signal.find_peaks(df.iloc[:, i], distance=min_distance, width=min_distance/5)[0]
+            seasonal_indices = (x[1] - seasonal_indices_new[1]) + seasonal_indices_new      # Hopefully the second peak is less influcenced by startup weirdness
+    return df.index[seasonal_indices[2:-2]] # get into the bulk data
     
 class Process:
     """Very prototype class for managing Process data
@@ -129,20 +132,8 @@ class Process:
         season_gauge = loaded_dict[order_df_key]
         with warnings.catch_warnings(action="ignore"):
             season_times = find_seasons(season_gauge)
-        process1_dict = cls(loaded_dict, season_times, os.path.basename(filename))
-        return process1_dict
-    
-    def plot_seasons(self, seasons, season_statistics, ax: Axes):
-        """Takes in a pd Series and some cyclicity determined elsewhere and plots it so that the seasons overlap
-
-        Args:
-            series (pd.Series): time-series of type Number
-            season_times (ndarray): Indices at which the seasons repeat
-            ax (Axes): plot area
-        """
-        for s in seasons:
-            ax.plot(s, alpha=0.5)
-        ax.plot(season_statistics, c='navy', label="Mean of seasons")
+        process1_dict = cls(loaded_dict, season_times, Path(filename).stem)
+        return process1_dict        
 
     def analyse_seasons(self, dict_key, table_key):
         """Use the season time-stamps to structure the data into seasons and do some statistical analysis regarding seasons
@@ -184,17 +175,19 @@ class Process:
 
         Args:
             dict_key (int): which entry of the dictionary one wants to look at
-            table_key (_type_): which column of the data frame is interesting
+            table_key (_type_): which column of the data frame is to be plotted
         """
         seasons, mean_season = self.analyse_seasons(dict_key, table_key)
-        plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.cool(np.linspace(0.01,1,len(seasons))))
         if not ax:
             fig = plt.figure()
             ax = fig.subplots()
             ax.set_xlabel("t/ms")
             ax.set_title(table_key)
             ax.set_xlim(mean_season.index[0] - 20, mean_season.index[-1] + 20)
-        self.plot_seasons(seasons, mean_season, ax)
+        ax.set_prop_cycle(plt.cycler("color", plt.cm.cool(np.linspace(0.01,1,len(seasons)))))  
+        for s in seasons:
+            ax.plot(s, alpha=0.5)
+        ax.plot(mean_season, c='navy', label="Mean of seasons")
         ax.legend()
 
 def pkl_from_csv(filepath:str, target_folder:str):
@@ -251,35 +244,56 @@ def find_dict_key(process:Process, table_key):
         if table_key in process.loaded_dict[key]:
             return key
 
-def comparison(table_key, *processes:Process):
-    """Compares the same measurement in two different processes
+def comparison(table_keys, processes):
+    """Compares the measurements in different processes. 
 
     Args:
-        table_key (_type_): _description_
+        table_keys: list of strings
+        processes: list of process
     """
-    fig = plt.figure(figsize = (20,10))
-    plotcount = math.factorial(len(processes) - 1) + 1
-    print(plotcount)
+    fig = plt.figure(figsize = (15,7))
+    
+    plotcount = math.factorial(len(table_keys) - 1) + 1
     ax1 = fig.add_subplot(1, plotcount, 1)
-    ax1.set_title("Full data")
+    ax1.set_title("Full data for {}".format(*table_keys))
     means = []
-    for process in processes:
+    for table_key, process in zip(table_keys, processes):
         dict_key = find_dict_key(process, table_key)
         if not dict_key:
-            print("Measurement not in both datasets!")
+            print("Measurement not in dataset!")
             return
-        _seasons, _mean = process.analyse_seasons(dict_key, table_key)
+        _seasons, _mean= process.analyse_seasons(dict_key, table_key)
         means.append(_mean)
-        process.display_data(dict_key, table_key, ax=ax1)
+        # Reset color-cycling to fresh cool scale
+        ax1.set_prop_cycle(plt.cycler("color", plt.cm.cool(np.linspace(0.01,1,len(_seasons)))))
+        for s in _seasons:
+            ax1.plot(s, alpha=0.2)
+    # set color cycling to greens for plotting the means
+    ax1.set_prop_cycle(plt.cycler("color", plt.cm.Greens(np.linspace(0.2,0.8,len(means)))))
+    for process, mean in zip(processes, means):
+        ax1.plot(mean, label=f"Mean of {process.name}")
         
+    ax1.legend()
+    ax1.set_xlim(min(_mean.index) - 100, max(_mean.index) + 100)
+    ax1.set_xlabel("t/ms")
+    
     index = 2
     for i in range(len(means)):
         for j in range(len(means)):
             if j > i:
+                mean_i = means[i]
+                mean_j = means[j]
+                # Synchornise the means so that the peaks overlap? 
+
+                mean_i_max_at = mean_i.idxmax(axis=0).values[0]
+                mean_j_max_at = mean_j.idxmax(axis=0).values[0]
+                mean_j.reindex(index = np.roll(mean_j.index, int((mean_i_max_at-mean_j_max_at)/(mean_j.index[1]- mean_j.index[0]))))
                 _ax = fig.add_subplot(1, plotcount, index)
-                comparison_plot = means[0] - means[1]
-                _ax.plot(comparison_plot)
-                _ax.set_title(f"{processes[i].name} and {processes[j].name}")
+                comparison_plot = mean_i - mean_j
+                _ax.plot(comparison_plot, label=f"Mean of {processes[i].name} - mean of {processes[j].name}")
+                _ax.set_title(f"Difference in {table_keys[i]} and {table_keys[j]}")
+                _ax.set_xlabel("t/ms")
+                _ax.legend()
                 index += 1
     fig.tight_layout()
     plt.show()
@@ -301,7 +315,8 @@ def main():
                 break
         pkl_from_csv(filepath, target_folder=os.path.join(os.path.dirname(filepath), "processed_data"))
         reading = input("Do you want to read another file? [y/n]")
-    
+        
+    loadpath=r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data"   # use standard path
     loading = "y"
     if filepath:
         loadpath = os.path.join(os.path.dirname(filepath), "processed_data")
@@ -315,34 +330,37 @@ def main():
     
     for i in loadnames:
         processes.append(Process.from_pkl(i))
-        
+    
+    
     while True:
-        
-        print(f"available measurement series sizes: {list(processes[0].loaded_dict.keys())}")
-        dict_key = input("Which series do you want to consider? ")
-        try:
-            processes[0].loaded_dict[int(dict_key)]
-        except KeyError:
-            print("Please choose a valid key.")
-            continue
-        except ValueError:
-            print("Please choose a numerical key.")
-            continue
-        dict_key = int(dict_key)
-        print("Measurements in this series:")
-        for i in sorted(list(processes[0].loaded_dict[dict_key])):
-            print(i)
-        table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
-        if table_key=='return':
-            continue
-        while True:
+        table_keys = []
+        for process in processes:
+            print(f"available measurement series sizes in {process.name}: {list(process.loaded_dict.keys())}")
+            dict_key = input("Which series do you want to consider? ")
             try:
-                processes[0].loaded_dict[dict_key][table_key]
+                process.loaded_dict[int(dict_key)]
             except KeyError:
-                table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
+                print("Please choose a valid key.")
                 continue
-            break
-        comparison(table_key, *processes)
+            except ValueError:
+                print("Please choose a numerical key.")
+                continue
+            dict_key = int(dict_key)
+            print("Measurements in this series:")
+            for i in sorted(list(process.loaded_dict[dict_key])):
+                print(i)
+            table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
+            if table_key=='return':
+                continue
+            while True:
+                try:
+                    process.loaded_dict[dict_key][table_key]
+                except KeyError:
+                    table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
+                    continue
+                break
+            table_keys.append(table_key)
+        comparison(table_keys, processes)
         end = input("End program? [y/n] ")
         if end == 'y':
             break
@@ -352,6 +370,6 @@ def testing_comp():
     names = [r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\\20240305_2_Al2O3+ExtraBias.pkl", r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\20240305_1_Al2O3_REP.pkl"]
     for i in names:
         processes.append(Process.from_pkl(i))
-    comparison("reaPositionSetPoint (30)" ,*processes)
+    comparison(["actual flow O2 (1)", "actual flow O2 (1)"], processes)
 
-testing_comp()
+main()
