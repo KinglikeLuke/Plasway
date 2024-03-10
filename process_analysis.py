@@ -202,34 +202,6 @@ def pkl_from_csv(filepath:str, target_folder:str):
     skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
     process_csv(filepath, skiprows, target_folder)
 
-def enter_file(extension:str, file_location=None):
-    """Gets user to open a file of given type in given folder
-
-    Args:
-        suffix (str): file extension, with dot
-        file_location (_type_, optional): _description_. Defaults to None.
-
-    Returns:
-        _type_: _description_
-    """
-    #D:\Local\Analysis\202402 Al2O3
-    if not file_location:
-        file_location = input("Specify folder path: ")
-    try:
-        glob.glob(file_location+f"\\*{extension}")[0]
-    except IndexError:
-        print("No valid files at this path!")
-        return enter_file(extension, None)
-    files = glob.glob(file_location+f"\\*{extension}")
-    print("Available files:")
-    for i in sorted(files):
-        print(os.path.basename(i))
-    filepath = os.path.join(file_location, input("Which file do you want to load? "))
-    while not filepath in files:
-        print("Please choose a file in the path")
-        filepath = os.path.join(file_location, input("Which file do you want to load? "))
-    return filepath
-
 def find_dict_key(process:Process, table_key):
     """Looks for a table key in the entirety of the data of process, returns first found instance
 
@@ -244,7 +216,7 @@ def find_dict_key(process:Process, table_key):
         if table_key in process.loaded_dict[key]:
             return key
 
-def comparison(table_keys, processes):
+def compare(table_keys, processes):
     """Compares the measurements in different processes. 
 
     Args:
@@ -298,24 +270,77 @@ def comparison(table_keys, processes):
     fig.tight_layout()
     plt.show()
 
+def enter_file(extension:str, file_location=None):
+    """Gets user to open a file of given type in given folder
+
+    Args:
+        suffix (str): file extension, with dot
+        file_location (_type_, optional): _description_. Defaults to None.
+
+    Returns:
+        _type_: _description_
+    """
+    #D:\Local\Analysis\202402 Al2O3
+    if not file_location:
+        file_location = input("Specify folder path: ")
+    try:
+        glob.glob(file_location+f"\\*{extension}")[0]
+    except IndexError:
+        print("No valid files at this path!")
+        return enter_file(extension, None)
+    files = glob.glob(file_location+f"\\*{extension}")
+    print("Available files:")
+    for i in sorted(files):
+        print(os.path.basename(i))
+    filepath = os.path.join(file_location, input("Which file do you want to load? "))
+    while not filepath in files:
+        print("Please choose a file in the path")
+        filepath = os.path.join(file_location, input("Which file do you want to load? "))
+    return filepath
+
+def enter_table_key(process):
+    while True:
+        print(f"available measurement series sizes in {process.name}: {list(process.loaded_dict.keys())}")
+        dict_key = input("Which series do you want to consider? ")
+        try:
+            process.loaded_dict[int(dict_key)]
+        except KeyError:
+            print("Please choose a valid key.")
+            continue
+        except ValueError:
+            print("Please choose a numerical key.")
+            continue
+        dict_key = int(dict_key)
+        print("Measurements in this series:")
+        for i in sorted(list(process.loaded_dict[dict_key])):
+            print(i)
+        table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
+        if table_key=='return':
+            continue
+        while True:
+            try:
+                process.loaded_dict[dict_key][table_key]
+            except KeyError:
+                table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
+                continue
+            break
+        return table_key
+
 def main():
     """
     Interesting comparisons: Input MFC needle ("reaPosSetpoint (34)"), Output MFC needle("reaPosSetpoint (30)"), O2Flow, Pressure, oxygen/argon "reaActFlo(35)" flow ratio
     """
-    # TODO interactive file loading. Might make problem with opening multiple files moot, as you would just select multiple
     loadpath = None # path to pkl file folder
     loadnames = [] # path to pkl file
     filepath = None # path to csv file
     processes = []
     reading = input("Do you want to read a new file?[y/n]" )
     while reading == 'y':
-        while True:
-            filepath = enter_file(".csv")
-            if filepath:
-                break
+        filepath = enter_file(".csv")
         pkl_from_csv(filepath, target_folder=os.path.join(os.path.dirname(filepath), "processed_data"))
         reading = input("Do you want to read another file? [y/n]")
-        
+    
+    # loading a pkl file into the program
     loadpath=r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data"   # use standard path
     loading = "y"
     if filepath:
@@ -327,49 +352,24 @@ def main():
         print(f"Loaded files: {[os.path.basename(name) for name in loadnames]}")
         loadpath = os.path.dirname(loadname)
         loading = input("Load another file?[y/n]")
-    
     for i in loadnames:
         processes.append(Process.from_pkl(i))
     
-    
+    # Main control loop: what to do with the files
     while True:
         table_keys = []
         for process in processes:
-            print(f"available measurement series sizes in {process.name}: {list(process.loaded_dict.keys())}")
-            dict_key = input("Which series do you want to consider? ")
-            try:
-                process.loaded_dict[int(dict_key)]
-            except KeyError:
-                print("Please choose a valid key.")
-                continue
-            except ValueError:
-                print("Please choose a numerical key.")
-                continue
-            dict_key = int(dict_key)
-            print("Measurements in this series:")
-            for i in sorted(list(process.loaded_dict[dict_key])):
-                print(i)
-            table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
-            if table_key=='return':
-                continue
-            while True:
-                try:
-                    process.loaded_dict[dict_key][table_key]
-                except KeyError:
-                    table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
-                    continue
-                break
-            table_keys.append(table_key)
-        comparison(table_keys, processes)
+            table_keys.append(enter_table_key(process))
+        compare(table_keys, processes)
         end = input("End program? [y/n] ")
         if end == 'y':
             break
 
-def testing_comp():
+def testing_compare():
     processes = []
     names = [r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\\20240305_2_Al2O3+ExtraBias.pkl", r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\20240305_1_Al2O3_REP.pkl"]
     for i in names:
         processes.append(Process.from_pkl(i))
-    comparison(["actual flow O2 (1)", "actual flow O2 (1)"], processes)
+    compare(["actual flow O2 (1)", "actual flow O2 (1)"], processes)
 
 main()
