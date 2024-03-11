@@ -50,7 +50,7 @@ def process_csv(filepath, skiprows, target_folder):
     for i in range(0, len(df.columns), 2):
         df_col = df.iloc[:,i+1]
         df_col_timestamps = df.iloc[:,i]
-        df_col.index = df_col_timestamps    # set timestamps as indices instead
+        df_col.index = df_col_timestamps - df_col_timestamps[0]   # set timestamps as indices instead
         df_col.dropna(inplace=True)
         if np.all(df_col.values < 0.001):    # If all values are 0, skip adding that column to the data
             continue
@@ -110,7 +110,7 @@ def find_seasons(df:pd.DataFrame):
 class Process:
     """Very prototype class for managing Process data
     """
-    def __init__(self, loaded_dict, season_times, name) -> None:
+    def __init__(self, loaded_dict:dict, season_times, name) -> None:
         self.loaded_dict = loaded_dict
         self.name = name
         self._season_times = season_times
@@ -134,6 +134,32 @@ class Process:
             season_times = find_seasons(season_gauge)
         process1_dict = cls(loaded_dict, season_times, Path(filename).stem)
         return process1_dict        
+
+    def return_entries(self):
+        """Returns a dict with all the names of observations in that process file
+
+        Returns:
+            dict: Dict of available measurements
+        """
+        entry_dict = {}
+        for key in self.loaded_dict:
+            entry_dict[key] = list(self.loaded_dict[key].columns)
+        return entry_dict
+               
+    def find_dict_key(self, table_key):
+        """Looks for a table key in the entirety of the data of process, returns first found instance or none if not in class
+
+        Args:
+        process (Process): _description_
+        table_key (_type_): _description_
+
+        Returns:
+        _type_: _description_
+        """
+        for key in self.loaded_dict:
+            if table_key in self.loaded_dict[key]:
+                return key
+        return None
 
     def analyse_seasons(self, dict_key, table_key):
         """Use the season time-stamps to structure the data into seasons and do some statistical analysis regarding seasons
@@ -202,20 +228,6 @@ def pkl_from_csv(filepath:str, target_folder:str):
     skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
     process_csv(filepath, skiprows, target_folder)
 
-def find_dict_key(process:Process, table_key):
-    """Looks for a table key in the entirety of the data of process, returns first found instance
-
-    Args:
-        process (Process): _description_
-        table_key (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-    for key in process.loaded_dict:
-        if table_key in process.loaded_dict[key]:
-            return key
-
 def compare(table_keys, processes):
     """Compares the measurements in different processes. 
 
@@ -231,7 +243,7 @@ def compare(table_keys, processes):
     means = []
     color_scales = [plt.cm.cool, plt.cm.magma, plt.cm.summer, plt.cm.bone]
     for table_key, process, color_scale in zip(table_keys, processes, color_scales):
-        dict_key = find_dict_key(process, table_key)
+        dict_key = process.find_dict_key(table_key)
         if not dict_key:
             print("Measurement not in dataset!")
             return
@@ -263,6 +275,7 @@ def compare(table_keys, processes):
                 mean_j.reindex(index = np.roll(mean_j.index, int((mean_i_max_at-mean_j_max_at)/(mean_j.index[1]- mean_j.index[0]))))
                 _ax = fig.add_subplot(1, plotcount, index)
                 comparison_plot = mean_i - mean_j
+                comparison_plot.dropna()
                 _ax.plot(comparison_plot, label=f"Mean of {processes[i].name} - mean of {processes[j].name}")
                 _ax.set_title(f"Difference in {table_keys[i]} and {table_keys[j]}")
                 _ax.set_xlabel("t/ms")
@@ -299,7 +312,7 @@ def enter_file(extension:str, file_location=None):
         filepath = os.path.join(file_location, input("Which file do you want to load? "))
     return filepath
 
-def enter_table_key(process):
+def enter_table_key_old(process):
     while True:
         print(f"available measurement series sizes in {process.name}: {list(process.loaded_dict.keys())}")
         dict_key = input("Which series do you want to consider? ")
@@ -326,6 +339,23 @@ def enter_table_key(process):
                 continue
             break
         return table_key
+    
+
+def enter_table_key(process:Process):
+    while True:
+        print(f"available measurements in {process.name}: ")
+        observation_names = process.return_entries()
+        for key in observation_names:
+            observations = observation_names[key]
+            observations_str = ', '.join(map(str, observations))
+            print("Observations of length {}: {}".format(key, observations_str))
+        table_key = input("Which observation do you want to consider? ")
+        dict_key = process.find_dict_key(table_key)
+        if not dict_key:
+            print("Please input a valid measuremnt from the list (without quotation marks): ")
+            continue
+        break
+    return table_key
 
 def main():
     """
@@ -368,10 +398,12 @@ def main():
 
 def testing_compare():
     processes = []
-    path = r"D:\Local\Analysis\202402 Al2O3\processed_data"
+    path = r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data"
     names = [os.path.join(path, "20240305_2_Al2O3+ExtraBias.pkl"), os.path.join(path, "20240305_1_Al2O3_REP.pkl")]
-    for i in names:
-        processes.append(Process.from_pkl(i))
+    for name in names:
+        processes.append(Process.from_pkl(name))
+    for process in processes:    
+        print(process.return_entries())
     compare(["rea", "actual flow O2 (1)"], processes)
 
 main()
