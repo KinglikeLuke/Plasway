@@ -229,7 +229,8 @@ def compare(table_keys, processes):
     ax1 = fig.add_subplot(1, plotcount, 1)
     ax1.set_title("Full data for {}".format(*table_keys))
     means = []
-    for table_key, process in zip(table_keys, processes):
+    color_scales = [plt.cm.cool, plt.cm.magma, plt.cm.summer, plt.cm.bone]
+    for table_key, process, color_scale in zip(table_keys, processes, color_scales):
         dict_key = find_dict_key(process, table_key)
         if not dict_key:
             print("Measurement not in dataset!")
@@ -237,7 +238,7 @@ def compare(table_keys, processes):
         _seasons, _mean= process.analyse_seasons(dict_key, table_key)
         means.append(_mean)
         # Reset color-cycling to fresh cool scale
-        ax1.set_prop_cycle(plt.cycler("color", plt.cm.cool(np.linspace(0.01,1,len(_seasons)))))
+        ax1.set_prop_cycle(plt.cycler("color", color_scale(np.linspace(0.01,1,len(_seasons)))))
         for s in _seasons:
             ax1.plot(s, alpha=0.2)
     # set color cycling to greens for plotting the means
@@ -367,9 +368,10 @@ def main():
 
 def testing_compare():
     processes = []
-    names = [r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\\20240305_2_Al2O3+ExtraBias.pkl", r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data\20240305_1_Al2O3_REP.pkl"]
+    path = r"D:\Local\Analysis\202402 Al2O3\processed_data"
+    names = [os.path.join(path, "20240305_2_Al2O3+ExtraBias.pkl"), os.path.join(path, "20240305_1_Al2O3_REP.pkl")]
     for i in names:
         processes.append(Process.from_pkl(i))
-    compare(["actual flow O2 (1)", "actual flow O2 (1)"], processes)
+    compare(["rea", "actual flow O2 (1)"], processes)
 
 main()
