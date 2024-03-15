@@ -113,9 +113,10 @@ def find_seasons(df:pd.DataFrame):
 class Process:
     """Very prototype class for managing Process data
     """
-    def __init__(self, loaded_dict:typing.Dict[int, pd.DataFrame], season_times, name) -> None:
+    def __init__(self, loaded_dict:typing.Dict[int, pd.DataFrame], season_times, name, filename) -> None:
         self.loaded_dict = loaded_dict
         self.name = name
+        self.filename = filename
         self._season_times = season_times
     
     @classmethod
@@ -135,9 +136,15 @@ class Process:
         season_gauge = loaded_dict[order_df_key]
         with warnings.catch_warnings(action="ignore"):
             season_times = find_seasons(season_gauge)
-        process1_dict = cls(loaded_dict, season_times, Path(filename).stem)
+        process1_dict = cls(loaded_dict, season_times, Path(filename).stem, filename)
         return process1_dict   
 
+    def save_to_pkl(self):
+        """Saves changes made to dictonary into the associated pickle file
+        """
+        with open(self.filename, 'wb') as f:
+            pickle.dump(self.loaded_dict, f)
+    
     def add_ratio_entry(self, table_key1:str, table_key2:str, name:str):
         """
         computes table_key1/table_key2 of two columns of identical length and adds that as a new column
@@ -411,7 +418,7 @@ def main():
     while True:
         # Adding ratios
         for process in processes:
-            if input(f"Add any ratios to {process.name}? [y/n]") == "y":
+            while input(f"Add any ratios to {process.name}? [y/n]") == "y":
                 print("Numerator")
                 table_key1 = enter_table_key(process)
                 print("Denominator (must be of identical length)")
@@ -424,8 +431,7 @@ def main():
         for process in processes:
             table_keys.append(enter_table_key(process))
         compare(table_keys, processes)
-        end = input("End program? [y/n] ")
-        if end == 'y':
+        if input("End program? [y/n] ") == 'y':
             break
 
 def testing_compare():
