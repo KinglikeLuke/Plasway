@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 import warnings
 import pickle
+import typing
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes._axes import Axes
 from scipy import signal
 import pandas as pd
+
 
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linewidth"] = 0.75
@@ -106,11 +108,12 @@ def find_seasons(df:pd.DataFrame):
             x = signal.find_peaks(df.iloc[:, i], distance=min_distance, width=min_distance/5)[0]
             seasonal_indices = (x[1] - seasonal_indices_new[1]) + seasonal_indices_new      # Hopefully the second peak is less influcenced by startup weirdness
     return df.index[seasonal_indices[2:-2]] # get into the bulk data
-    
+
+
 class Process:
     """Very prototype class for managing Process data
     """
-    def __init__(self, loaded_dict:dict, season_times, name) -> None:
+    def __init__(self, loaded_dict:typing.Dict[int, pd.DataFrame], season_times, name) -> None:
         self.loaded_dict = loaded_dict
         self.name = name
         self._season_times = season_times
@@ -133,10 +136,26 @@ class Process:
         with warnings.catch_warnings(action="ignore"):
             season_times = find_seasons(season_gauge)
         process1_dict = cls(loaded_dict, season_times, Path(filename).stem)
-        return process1_dict        
+        return process1_dict   
 
-    def return_entries(self):
-        """Returns a dict with all the names of observations in that process file
+    def add_ratio_entry(self, table_key1:str, table_key2:str, name:str):
+        """
+        computes table_key1/table_key2 of two columns of identical length and adds that as a new column
+        TODO maybe add support for different length series
+        """
+        dict_key1 = self.find_dict_key(table_key1)
+        dict_key2 = self.find_dict_key(table_key2)
+        if dict_key1 != dict_key2 or not dict_key1:
+            print("Must be two columns with the same lengths in the dataframe!")
+            return
+        series1 = self.loaded_dict[dict_key1][table_key1]
+        series2 = self.loaded_dict[dict_key2][table_key2]
+        self.loaded_dict[min(dict_key1, dict_key2)].loc[:, name] = series1/series2
+        print(len(self.loaded_dict[min(dict_key1, dict_key2)].loc[:, name]))
+
+
+    def print_entries(self):
+        """Prints a dict with all the names of observations in that process file
 
         Returns:
             dict: Dict of available measurements
@@ -144,7 +163,10 @@ class Process:
         entry_dict = {}
         for key in self.loaded_dict:
             entry_dict[key] = list(self.loaded_dict[key].columns)
-        return entry_dict
+        for key in entry_dict:
+            observations = entry_dict[key]
+            observations_str = ', '.join(map(str, sorted(observations)))
+            print("Observations of length {}: {}".format(key, observations_str))
                
     def find_dict_key(self, table_key):
         """Looks for a table key in the entirety of the data of process, returns first found instance or none if not in class
@@ -196,13 +218,14 @@ class Process:
         var = np.sqrt(np.sum(deviation_from_mean**2, axis=1)/season_number) # not quite the variance, quantifies the difference of the whole season from the mean
         return seasons, analysis_df
         
-    def display_data(self, dict_key:int, table_key:str, ax = None):
+    def display_data(self, table_key:str, ax = None):
         """Somewhat prototypical action on interaction: plot and (as yet unreturned) data-analysis
 
         Args:
             dict_key (int): which entry of the dictionary one wants to look at
             table_key (_type_): which column of the data frame is to be plotted
         """
+        dict_key = self.find_dict_key(table_key)
         seasons, mean_season = self.analyse_seasons(dict_key, table_key)
         if not ax:
             fig = plt.figure()
@@ -228,7 +251,7 @@ def pkl_from_csv(filepath:str, target_folder:str):
     skiprows = np.concatenate([np.arange(0,5), np.arange(7,24)])
     process_csv(filepath, skiprows, target_folder)
 
-def compare(table_keys, processes):
+def compare(table_keys, processes:typing.List[Process]):
     """Compares the measurements in different processes. 
 
     Args:
@@ -344,11 +367,7 @@ def enter_table_key_old(process):
 def enter_table_key(process:Process):
     while True:
         print(f"available measurements in {process.name}: ")
-        observation_names = process.return_entries()
-        for key in observation_names:
-            observations = observation_names[key]
-            observations_str = ', '.join(map(str, observations))
-            print("Observations of length {}: {}".format(key, observations_str))
+        process.print_entries()
         table_key = input("Which observation do you want to consider? ")
         dict_key = process.find_dict_key(table_key)
         if not dict_key:
@@ -364,10 +383,12 @@ def main():
     loadpath = None # path to pkl file folder
     loadnames = [] # path to pkl file
     filepath = None # path to csv file
-    processes = []
+    processes: typing.List[Process]  = []
     reading = input("Do you want to read a new file?[y/n]" )
     while reading == 'y':
-        filepath = enter_file(".csv")
+        if filepath: folder = os.path.dirname(filepath) 
+        else: folder = None
+        filepath = enter_file(".csv", file_location=folder)
         pkl_from_csv(filepath, target_folder=os.path.join(os.path.dirname(filepath), "processed_data"))
         reading = input("Do you want to read another file? [y/n]")
     
@@ -388,7 +409,18 @@ def main():
     
     # Main control loop: what to do with the files
     while True:
+        # Adding ratios
+        for process in processes:
+            if input(f"Add any ratios to {process.name}? [y/n]") == "y":
+                print("Numerator")
+                table_key1 = enter_table_key(process)
+                print("Denominator (must be of identical length)")
+                table_key2 = enter_table_key(process)
+                name = input("Name for new dataframe: ")
+                process.add_ratio_entry(table_key1, table_key2, name)
+        # Creating comparison plots
         table_keys = []
+        print("Comparing Measurements")
         for process in processes:
             table_keys.append(enter_table_key(process))
         compare(table_keys, processes)
@@ -405,5 +437,15 @@ def testing_compare():
     for process in processes:    
         print(process.return_entries())
     compare(["rea", "actual flow O2 (1)"], processes)
+    
+def testing_add_col():
+    processes = []
+    path = r"D:\Local\Analysis\202402 Al2O3\processed_data"
+    name = os.path.join(path, "20240305_2_Al2O3+ExtraBias.pkl")
+    process = Process.from_pkl(name)
+    process.print_entries()
+    process.add_ratio_entry("reaSetFlow (13)", "reaSetFlow (19)", "13 to 19")
+    process.print_entries()
+    process.display_data("13 to 19")
 
 main()
