@@ -8,10 +8,11 @@ import typing
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes._axes import Axes
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from scipy import signal
 import pandas as pd
 
-
+plt.rcParams.update({'figure.autolayout': True})
 plt.rcParams["axes.grid"] = True
 plt.rcParams["grid.linewidth"] = 0.75
 def loadfiles(file, skiprows):
@@ -265,32 +266,42 @@ def compare(table_keys, processes:typing.List[Process]):
         table_keys: list of strings
         processes: list of process
     """
-    fig = plt.figure(figsize = (15,7))
-    
-    plotcount = math.factorial(len(table_keys) - 1) + 1
+    n = len(table_keys)
+    plotcount = int(n*(n-1)/2) + 1
+    fig = plt.figure(figsize = (7*plotcount,7))
     ax1 = fig.add_subplot(1, plotcount, 1)
     ax1.set_title("Full data for {}".format(*table_keys))
     means = []
-    color_scales = [plt.cm.cool, plt.cm.magma, plt.cm.summer, plt.cm.bone]
-    for table_key, process, color_scale in zip(table_keys, processes, color_scales):
-        dict_key = process.find_dict_key(table_key)
+    color_maps = [plt.cm.cool, plt.cm.magma, plt.cm.summer, plt.cm.bone]
+    minimum = np.infty
+    maximum = - np.infty
+    for i in range(len(table_keys)):
+        dict_key = processes[i].find_dict_key(table_keys[i])
         if not dict_key:
             print("Measurement not in dataset!")
             return
-        _seasons, _mean= process.analyse_seasons(dict_key, table_key)
+        _seasons, _mean= processes[i].analyse_seasons(dict_key, table_keys[i])
         means.append(_mean)
         # Reset color-cycling to fresh cool scale
-        ax1.set_prop_cycle(plt.cycler("color", color_scale(np.linspace(0.01,1,len(_seasons)))))
+        gradient = np.linspace(0.01,1,len(_seasons))
+        ax1.set_prop_cycle(plt.cycler("color", color_maps[i](gradient)))
+        ax_colormap = inset_axes(ax1, width="30%", height="2%", loc=("lower center"), borderpad=0.5+i*1.1)   # Inset that shows the cmaps for the cycle data. Must be located in a center coordinate so that the border hack works
+        ax_colormap.imshow(np.vstack((gradient, gradient)), aspect="auto", cmap=color_maps[i])
+        ax_colormap.text(-0.01, 0, processes[i].name, va='bottom', ha='right', fontsize=10, transform=ax_colormap.transAxes)
+        ax_colormap.set_axis_off()
         for s in _seasons:
             ax1.plot(s, alpha=0.2)
+            if min(s) < minimum: minimum = min(s)
+            if max(s) > maximum: maximum = max(s)
     # set color cycling to greens for plotting the means
     ax1.set_prop_cycle(plt.cycler("color", plt.cm.Greens(np.linspace(0.2,0.8,len(means)))))
     for process, mean in zip(processes, means):
         ax1.plot(mean, label=f"Mean of {process.name}")
         
-    ax1.legend()
+    ax1.legend(loc=("upper center"))
     ax1.set_xlim(min(_mean.index) - 100, max(_mean.index) + 100)
     ax1.set_xlabel("t/ms")
+    ax1.set_ylim(minimum - 0.1*(maximum-minimum), maximum + 0.1*(maximum-minimum))
     
     index = 2
     for i in range(len(means)):
@@ -299,7 +310,7 @@ def compare(table_keys, processes:typing.List[Process]):
                 mean_i = means[i]
                 mean_j = means[j]
                 # Synchornise the means so that the peaks overlap? 
-
+                print(plotcount, index)
                 mean_i_max_at = mean_i.idxmax(axis=0).values[0]
                 mean_j_max_at = mean_j.idxmax(axis=0).values[0]
                 mean_j.reindex(index = np.roll(mean_j.index, int((mean_i_max_at-mean_j_max_at)/(mean_j.index[1]- mean_j.index[0]))))
@@ -307,7 +318,10 @@ def compare(table_keys, processes:typing.List[Process]):
                 comparison_plot = mean_i - mean_j
                 comparison_plot.dropna()
                 _ax.plot(comparison_plot, label=f"Mean of {processes[i].name} - mean of {processes[j].name}")
-                _ax.set_title(f"Difference in {table_keys[i]} and {table_keys[j]}")
+                if table_keys[i]!=table_keys[j]:
+                    _ax.set_title(f"Difference in {table_keys[i]} and {table_keys[j]}")
+                else:
+                    _ax.set_title(f"Difference in {table_keys[i]}")
                 _ax.set_xlabel("t/ms")
                 _ax.legend()
                 index += 1
@@ -342,35 +356,6 @@ def enter_file(extension:str, file_location=None):
         filepath = os.path.join(file_location, input("Which file do you want to load? "))
     return filepath
 
-def enter_table_key_old(process):
-    while True:
-        print(f"available measurement series sizes in {process.name}: {list(process.loaded_dict.keys())}")
-        dict_key = input("Which series do you want to consider? ")
-        try:
-            process.loaded_dict[int(dict_key)]
-        except KeyError:
-            print("Please choose a valid key.")
-            continue
-        except ValueError:
-            print("Please choose a numerical key.")
-            continue
-        dict_key = int(dict_key)
-        print("Measurements in this series:")
-        for i in sorted(list(process.loaded_dict[dict_key])):
-            print(i)
-        table_key = input("Which measurement interests you? (or 'return' to go back to series selection) ")
-        if table_key=='return':
-            continue
-        while True:
-            try:
-                process.loaded_dict[dict_key][table_key]
-            except KeyError:
-                table_key = input("Please input a valid measuremnt from the list (without quotation marks): ")
-                continue
-            break
-        return table_key
-    
-
 def enter_table_key(process:Process):
     while True:
         print(f"available measurements in {process.name}: ")
@@ -391,13 +376,11 @@ def main():
     loadnames = [] # path to pkl file
     filepath = None # path to csv file
     processes: typing.List[Process]  = []
-    reading = input("Do you want to read a new file?[y/n]" )
-    while reading == 'y':
+    while input("Do you want to read a new file?[y/n]" ) == 'y':
         if filepath: folder = os.path.dirname(filepath) 
         else: folder = None
         filepath = enter_file(".csv", file_location=folder)
         pkl_from_csv(filepath, target_folder=os.path.join(os.path.dirname(filepath), "processed_data"))
-        reading = input("Do you want to read another file? [y/n]")
     
     # loading a pkl file into the program
     loadpath=r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data"   # use standard path
@@ -415,16 +398,17 @@ def main():
         processes.append(Process.from_pkl(i))
     
     # Main control loop: what to do with the files
+    
+    # Adding ratios
+    for process in processes:
+        while input(f"Add any ratios to {process.name}? [y/n]") == "y":
+            print("Numerator")
+            table_key1 = enter_table_key(process)
+            print("Denominator (must be of identical length)")
+            table_key2 = enter_table_key(process)
+            name = input("Name for new dataframe: ")
+            process.add_ratio_entry(table_key1, table_key2, name)
     while True:
-        # Adding ratios
-        for process in processes:
-            while input(f"Add any ratios to {process.name}? [y/n]") == "y":
-                print("Numerator")
-                table_key1 = enter_table_key(process)
-                print("Denominator (must be of identical length)")
-                table_key2 = enter_table_key(process)
-                name = input("Name for new dataframe: ")
-                process.add_ratio_entry(table_key1, table_key2, name)
         # Creating comparison plots
         table_keys = []
         print("Comparing Measurements")
@@ -436,16 +420,15 @@ def main():
 
 def testing_compare():
     processes = []
-    path = r"D:\Dokumente\Privat\Plasway\Al2O3 Process Data\processed_data"
-    names = [os.path.join(path, "20240305_2_Al2O3+ExtraBias.pkl"), os.path.join(path, "20240305_1_Al2O3_REP.pkl")]
+    path = r"D:\Local\Analysis\202402 Al2O3\processed_data"
+    names = [os.path.join(path, "20240305_2_Al2O3+ExtraBias.pkl"), os.path.join(path, "20240305_1_Al2O3_REP.pkl"), os.path.join(path, "20240305_1_Al2O3_REP.pkl")]
     for name in names:
         processes.append(Process.from_pkl(name))
     for process in processes:    
-        print(process.return_entries())
-    compare(["rea", "actual flow O2 (1)"], processes)
+        process.print_entries()
+    compare(["reaPositionSetPoint (30)", "reaPositionSetPoint (30)", "reaPositionSetPoint.1"], processes)
     
 def testing_add_col():
-    processes = []
     path = r"D:\Local\Analysis\202402 Al2O3\processed_data"
     name = os.path.join(path, "20240305_2_Al2O3+ExtraBias.pkl")
     process = Process.from_pkl(name)
@@ -454,4 +437,4 @@ def testing_add_col():
     process.print_entries()
     process.display_data("13 to 19")
 
-main()
+testing_compare()
