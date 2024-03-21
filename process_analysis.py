@@ -267,9 +267,9 @@ def compare(table_keys, processes:typing.List[Process]):
         processes: list of process
     """
     n = len(table_keys)
-    plotcount = int(n*(n-1)/2) + 1
-    fig = plt.figure(figsize = (7*plotcount,7))
-    ax1 = fig.add_subplot(1, plotcount, 1)
+    plotcount = int(n*(n-1)/2) + 1 # vestigial from when all comparisons were plotted into the same figure
+    fig = plt.figure(figsize = (7,7))
+    ax1 = fig.add_subplot(1, 1, 1)
     ax1.set_title("Full data for {}".format(*table_keys))
     means = []
     color_maps = [plt.cm.cool, plt.cm.magma, plt.cm.summer, plt.cm.bone]
@@ -285,11 +285,14 @@ def compare(table_keys, processes:typing.List[Process]):
         # Reset color-cycling to fresh cool scale
         gradient = np.linspace(0.01,1,len(_seasons))
         ax1.set_prop_cycle(plt.cycler("color", color_maps[i](gradient)))
-        ax_colormap = inset_axes(ax1, width="30%", height="2%", loc=("lower center"), borderpad=0.5+i*1.1)   # Inset that shows the cmaps for the cycle data. Must be located in a center coordinate so that the border hack works
+        ax_colormap = inset_axes(ax1, width="30%", height="2%", loc=("lower center"), borderpad=1.5+i*1.1)   # Inset that shows the cmaps for the cycle data. Must be located in a center coordinate so that the border hack works
         ax_colormap.imshow(np.vstack((gradient, gradient)), aspect="auto", cmap=color_maps[i])
         ax_colormap.text(-0.01, 0, processes[i].name, va='bottom', ha='right', fontsize=10, transform=ax_colormap.transAxes)
-        ax_colormap.set_axis_off()
-        for s in _seasons:
+        if i == 0: 
+            ax_colormap.axes.get_yaxis().set_visible(False) # only the lowest bar gets the bottom axis
+            ax_colormap.grid(False)
+        else: ax_colormap.set_axis_off()
+        for s in _seasons[1:-1]:
             ax1.plot(s, alpha=0.2)
             if min(s) < minimum: minimum = min(s)
             if max(s) > maximum: maximum = max(s)
@@ -301,20 +304,19 @@ def compare(table_keys, processes:typing.List[Process]):
     ax1.legend(loc=("upper center"))
     ax1.set_xlim(min(_mean.index) - 100, max(_mean.index) + 100)
     ax1.set_xlabel("t/ms")
-    ax1.set_ylim(minimum - 0.1*(maximum-minimum), maximum + 0.1*(maximum-minimum))
-    
-    index = 2
+    ax1.set_ylim(minimum - 0.2*(maximum-minimum), maximum + 0.1*(maximum-minimum))
+    fig.tight_layout()
     for i in range(len(means)):
         for j in range(len(means)):
             if j > i:
                 mean_i = means[i]
                 mean_j = means[j]
                 # Synchornise the means so that the peaks overlap? 
-                print(plotcount, index)
                 mean_i_max_at = mean_i.idxmax(axis=0).values[0]
                 mean_j_max_at = mean_j.idxmax(axis=0).values[0]
                 mean_j.reindex(index = np.roll(mean_j.index, int((mean_i_max_at-mean_j_max_at)/(mean_j.index[1]- mean_j.index[0]))))
-                _ax = fig.add_subplot(1, plotcount, index)
+                _fig = plt.figure()
+                _ax = _fig.add_subplot(1, 1, 1)
                 comparison_plot = mean_i - mean_j
                 comparison_plot.dropna()
                 _ax.plot(comparison_plot, label=f"Mean of {processes[i].name} - mean of {processes[j].name}")
@@ -324,12 +326,11 @@ def compare(table_keys, processes:typing.List[Process]):
                     _ax.set_title(f"Difference in {table_keys[i]}")
                 _ax.set_xlabel("t/ms")
                 _ax.legend()
-                index += 1
-    fig.tight_layout()
+                _fig.tight_layout()
     plt.show()
 
 def enter_file(extension:str, file_location=None):
-    """Gets user to open a file of given type in given folder
+    """Gets user to provide a filepath of chosen type in chosen folder
 
     Args:
         suffix (str): file extension, with dot
@@ -357,12 +358,19 @@ def enter_file(extension:str, file_location=None):
     return filepath
 
 def enter_table_key(process:Process):
+    """Helps user choose the observation they want to open in process
+
+    Args:
+        process (Process): _description_
+
+    Returns:
+        _type_: _description_
+    """
     while True:
         print(f"available measurements in {process.name}: ")
         process.print_entries()
         table_key = input("Which observation do you want to consider? ")
-        dict_key = process.find_dict_key(table_key)
-        if not dict_key:
+        if not process.find_dict_key(table_key):
             print("Please input a valid measuremnt from the list (without quotation marks): ")
             continue
         break
